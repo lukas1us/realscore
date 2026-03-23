@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +9,19 @@ from backend.routers import analysis, properties, batch, benchmarks
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    _migrate_db()
+    yield
+
+
 app = FastAPI(
     title="RealScore CZ API",
     description="Czech real estate investment scoring tool",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -25,12 +35,6 @@ app.include_router(analysis.router)
 app.include_router(properties.router)
 app.include_router(batch.router)
 app.include_router(benchmarks.router)
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    _migrate_db()
 
 
 def _migrate_db():
