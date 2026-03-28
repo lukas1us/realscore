@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.database import init_db
-from backend.routers import analysis, properties, batch, benchmarks
+from backend.routers import analysis, properties, benchmarks
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -33,7 +33,6 @@ app.add_middleware(
 
 app.include_router(analysis.router)
 app.include_router(properties.router)
-app.include_router(batch.router)
 app.include_router(benchmarks.router)
 
 

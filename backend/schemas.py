@@ -120,20 +120,6 @@ class PropertyDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class BatchInput(BaseModel):
-    url: str                      # Sreality search URL
-
-
-class BatchResult(BaseModel):
-    total_found: int              # raw Sreality region result_size (not shown in UI)
-    total_matching: int = 0       # after GPS/bbox filter (what was actually collected)
-    total_scraped: int            # successfully fetched detail pages
-    total_saved: int              # scored + saved to DB
-    total_skipped: int = 0        # already in DB, skipped
-    properties: list["PropertyListItem"]
-    errors: list[str]
-
-
 class PropertyListItem(BaseModel):
     id: int
     url: Optional[str]

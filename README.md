@@ -21,7 +21,6 @@ realscoreCZ/
 │   │   └── 003_price_benchmarks.sql    # CREATE TABLE price_benchmarks + bootstrap (existing DB)
 │   ├── routers/
 │   │   ├── analysis.py    # POST /api/analyze
-│   │   ├── batch.py       # POST /api/batch-analyze
 │   │   ├── benchmarks.py  # POST /api/benchmarks/refresh
 │   │   └── properties.py  # GET/DELETE /api/properties
 │   ├── scrapers/
@@ -162,9 +161,6 @@ Supported URL formats:
 - `https://www.sreality.cz/detail/prodej/byt/2+1/Praha/.../12345678`
 - `https://www.bezrealitky.cz/nemovitosti-byty-domy/...`
 
-### Manual mode
-Switch to the **Ruční zadání** tab and fill in the property parameters directly.
-
 ### History
 Switch to **Historie analýz** to see all previously scored properties, sortable by score, yield, price, or date.
 
@@ -199,8 +195,7 @@ Any dimension below 40 generates a **red flag** in the output.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/analyze` | Analyze a property (URL or manual fields) |
-| `POST` | `/api/batch-analyze` | Batch-analyze a Sreality search URL |
+| `POST` | `/api/analyze` | Analyze a property by URL |
 | `GET` | `/api/properties` | List analyzed properties (with filters + pagination) |
 | `GET` | `/api/properties/filters` | Available filter options (regions, energy classes, …) |
 | `GET` | `/api/properties/count` | Count properties matching filters |
@@ -220,22 +215,6 @@ curl -X POST http://localhost:8000/api/analyze \
   }'
 ```
 
-Or manual:
-
-```bash
-curl -X POST http://localhost:8000/api/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "city": "Brno",
-    "district": "Brno-město",
-    "price": 4500000,
-    "size_m2": 65,
-    "disposition": "2+1",
-    "construction_type": "cihla",
-    "energy_class": "C",
-    "year_built": 1995
-  }'
-```
 
 ## Price Benchmarks
 
