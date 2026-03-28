@@ -228,6 +228,19 @@ def scrape_sreality(url: str) -> dict:
         if re.search(r"bez\s+možnosti\s+převodu|bez\s+prevodu", desc_text, re.IGNORECASE):
             ownership = "DV_no_transfer"
 
+    # --- service charge (fond oprav) ---
+    service_charge: Optional[float] = None
+    raw_service = (
+        _find_item(items, "Poplatek za správu domu a pozemku")
+        or _find_item(items, "Fond oprav")
+        or _find_item(items, "Náklady na bydlení")
+        or _find_item(items, "Náklady na správu domu")
+    )
+    if raw_service:
+        sc_nums = re.findall(r"[\d]+", raw_service.replace("\xa0", "").replace(" ", ""))
+        if sc_nums:
+            service_charge = float(sc_nums[0])
+
     # --- disposition from name ---
     disposition: Optional[str] = None
     disp_match = re.search(r"(\d\+(?:kk|\d))", name, re.IGNORECASE)
@@ -280,6 +293,7 @@ def scrape_sreality(url: str) -> dict:
         "floor": floor,
         "has_elevator": has_elevator,
         "ownership": ownership,
+        "service_charge": service_charge,
         "raw_data": data,
     }
 

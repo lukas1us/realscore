@@ -54,6 +54,7 @@ from backend.models import Property
 from backend.scrapers.sreality import scrape_sreality, HEADERS
 from backend.scrapers.sreality_search import collect_estate_ids
 from backend.services.scoring import compute_scores
+from backend.utils.regions import extract_kraj
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,12 @@ def run_scan(
                     floor=prop_data.get("floor"),
                     has_elevator=prop_data.get("has_elevator"),
                     ownership=prop_data.get("ownership"),
+                    building_revitalized=prop_data.get("building_revitalized"),
+                    service_charge=prop_data.get("service_charge"),
+                    svl_risk=prop_data.get("svl_risk"),
+                    locality_tier=prop_data.get("locality_tier"),
+                    city_stigma=scores.get("city_stigma"),
+                    kraj=extract_kraj(prop_data.get("city"), prop_data.get("district")),
                     score_total=scores.get("score_total"),
                     score_yield=scores.get("score_yield"),
                     score_demographic=scores.get("score_demographic"),
