@@ -270,9 +270,19 @@ def scrape_sreality(url: str) -> dict:
             # "Street, Municipality, Region" — municipality is second-to-last
             city = parts[-2]
             district = parts[-2]  # keep municipality in district for benchmark lookups
+        elif len(parts) == 2:
+            # Two formats are possible:
+            #   "Město, Ústecký kraj"  → last part contains "kraj"  → first  part is city
+            #   "Ulice, Město"         → last part is a city name   → second part is city
+            if re.search(r"\bkraj\b", parts[-1], re.IGNORECASE):
+                city = parts[0]
+                district = parts[0]
+            else:
+                city = parts[-1]
+                district = parts[-1]
         else:
             city = parts[0] if parts else None
-            district = parts[1] if len(parts) >= 2 else None
+            district = None
 
     logger.info(
         "Parsed: price=%s size=%s disposition=%s city=%s",

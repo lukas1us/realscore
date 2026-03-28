@@ -55,6 +55,12 @@ def _extract_city(locality) -> Optional[str]:
     elif len(parts) >= 3:
         # "Street, Municipality, Region" → municipality je druhý od konce
         return parts[-2]
+    elif len(parts) == 2:
+        # "Město, Ústecký kraj" → první část je město
+        # "Ulice, Město"        → druhá část je město
+        if re.search(r"\bkraj\b", parts[-1], re.IGNORECASE):
+            return parts[0]
+        return parts[-1]
     else:
         return parts[0] if parts else None
 
