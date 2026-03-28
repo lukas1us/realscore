@@ -146,8 +146,8 @@ def _scrape_and_score(
             # the search cap. Drop listings whose scraped price is over the limit.
             detail_price = prop_data.get("price")
             if detail_price and detail_price > price_max:
-                logger.debug(
-                    "Estate %d skipped: price %.0f > price_max %d",
+                logger.info(
+                    "Estate %d skipped: scraped price %.0f > price_max %d",
                     estate_id, detail_price, price_max,
                 )
                 return estate_id, None, None

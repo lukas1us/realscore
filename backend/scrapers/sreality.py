@@ -129,12 +129,15 @@ def scrape_sreality(url: str) -> dict:
     logger.debug("Items: %s", [i.get("name") for i in items])
 
     # --- price ---
-    # Try top-level price_czk / price first, then fall back to items "Celková cena"
-    price_czk: Optional[float] = _num(data.get("price_czk")) or _num(data.get("price"))
+    # "Celková cena" from items is the total price shown on the listing page and
+    # the same value Sreality uses for its price_to search filter.  The top-level
+    # price_czk field can be a lower base/asking price (without broker commission),
+    # which would cause the price-cap post-filter in full_market_scan to miss
+    # over-budget listings.  Always prefer items first.
+    raw_price_item = _find_item(items, "Celková cena") or _find_item(items, "Cena")
+    price_czk: Optional[float] = _num(raw_price_item) if raw_price_item else None
     if price_czk is None:
-        raw_price_item = _find_item(items, "Celková cena") or _find_item(items, "Cena")
-        if raw_price_item:
-            price_czk = _num(raw_price_item)
+        price_czk = _num(data.get("price_czk")) or _num(data.get("price"))
 
     # --- size ---
     size_m2: Optional[float] = None
