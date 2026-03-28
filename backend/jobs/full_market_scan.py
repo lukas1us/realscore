@@ -34,6 +34,7 @@ Usage
   python -m backend.jobs.full_market_scan --price-max 3000000
   python -m backend.jobs.full_market_scan --dry-run        # count only, no DB writes
   python -m backend.jobs.full_market_scan --region 14      # single region (debug)
+  python -m backend.jobs.full_market_scan --request-delay 1.0 --max-retries 5
 """
 
 from __future__ import annotations
@@ -61,8 +62,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PRICE_MAX_DEFAULT = 5_000_000
-REQUEST_DELAY = 0.3       # seconds between detail fetches (per worker)
-BUCKET_LIMIT = 950        # if region result_size exceeds this, subdivide by disposition
+REQUEST_DELAY_DEFAULT = 0.5   # seconds between requests per worker (CLI default)
+MAX_RETRIES_DEFAULT = 3       # retry attempts before skipping a failed estate
+BUCKET_LIMIT = 950            # if region result_size exceeds this, subdivide by disposition
 
 # Sreality ownership codes: 1=osobní, 2=družstevní, 3=státní/obecní
 # TODO: remove this filter (and its use in base_params) once all ownership types are desired
@@ -97,7 +99,7 @@ def _known_estate_ids(db) -> set[int]:
     return known
 
 
-def _result_size(params: dict) -> int:
+def _result_size(params: dict, request_delay: float = 0.0) -> int:
     """Fetch result_size for a given set of API params (1 cheap request)."""
     try:
         with httpx.Client(headers=HEADERS, timeout=15) as client:
@@ -109,41 +111,76 @@ def _result_size(params: dict) -> int:
                 return int(resp.json().get("result_size", 0))
     except Exception as exc:
         logger.warning("result_size probe failed: %s", exc)
+    finally:
+        if request_delay:
+            time.sleep(request_delay)
     return 0
 
 
 def _scrape_and_score(
     estate_id: int,
     price_max: int,
+    request_delay: float = REQUEST_DELAY_DEFAULT,
+    max_retries: int = MAX_RETRIES_DEFAULT,
 ) -> tuple[int, dict | None, str | None]:
     """
     Worker function: scrape one estate detail and compute all scores.
 
+    Retries on HTTP 429 or connection errors with exponential backoff.
+    Skips immediately on HTTP 403 or 404.
+    After max_retries exhausted, logs a warning and returns an error string.
+
     Returns (estate_id, result_dict | None, error_msg | None).
-    result_dict is None when the estate should be skipped (price over cap or error).
+    result_dict is None when the estate should be skipped (price over cap,
+    HTTP 403/404, or max retries exhausted).
     """
     url = f"https://www.sreality.cz/detail/-/-/-/-/{estate_id}"
-    try:
-        prop_data = scrape_sreality(url)
+    last_error: str | None = None
 
-        # Sreality API price filter is not strict – detail price can exceed
-        # the search cap. Drop listings whose scraped price is over the limit.
-        detail_price = prop_data.get("price")
-        if detail_price and detail_price > price_max:
-            logger.debug(
-                "Estate %d skipped: price %.0f > price_max %d",
-                estate_id, detail_price, price_max,
-            )
-            return estate_id, None, None
+    for attempt in range(max_retries):
+        try:
+            prop_data = scrape_sreality(url)
 
-        scores = compute_scores(prop_data)
-        return estate_id, {**prop_data, "_scores": scores}, None
+            # Sreality API price filter is not strict – detail price can exceed
+            # the search cap. Drop listings whose scraped price is over the limit.
+            detail_price = prop_data.get("price")
+            if detail_price and detail_price > price_max:
+                logger.debug(
+                    "Estate %d skipped: price %.0f > price_max %d",
+                    estate_id, detail_price, price_max,
+                )
+                return estate_id, None, None
 
-    except Exception as exc:
-        return estate_id, None, f"Estate {estate_id}: {exc}"
+            scores = compute_scores(prop_data)
+            return estate_id, {**prop_data, "_scores": scores}, None
 
-    finally:
-        time.sleep(REQUEST_DELAY)  # polite delay per worker thread
+        except Exception as exc:
+            err_str = str(exc)
+
+            # Non-retriable: resource gone or forbidden
+            if "403" in err_str or "404" in err_str:
+                logger.debug("Estate %d: skipping (HTTP 403/404)", estate_id)
+                return estate_id, None, None
+
+            last_error = err_str
+
+            # Retriable: rate-limited or transient network error
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Estate %d: attempt %d/%d failed (%s), retrying in %ds",
+                    estate_id, attempt + 1, max_retries, exc, backoff,
+                )
+                time.sleep(backoff)
+
+        finally:
+            # Polite delay per worker thread after every request attempt
+            time.sleep(request_delay)
+
+    logger.warning(
+        "Estate %d: all %d retries exhausted – %s", estate_id, max_retries, last_error
+    )
+    return estate_id, None, f"Estate {estate_id}: {last_error}"
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +190,16 @@ def _scrape_and_score(
 def collect_all_ids(
     price_max: int,
     region_filter: Optional[int] = None,
+    request_delay: float = REQUEST_DELAY_DEFAULT,
 ) -> list[int]:
     """
     Collect ALL estate IDs for apartments (sale) up to price_max CZK.
 
     Uses a thread pool to parallelize region probes, disposition probes,
     and paginated ID collection.  Returns a deduplicated list.
+
+    Args:
+        request_delay: seconds to sleep after each API call per worker.
     """
     base_params = {
         "category_main_cb": 1,          # prodej (sale)
@@ -176,7 +217,7 @@ def collect_all_ids(
     region_counts: dict[int, int] = {}
     with ThreadPoolExecutor(max_workers=ID_WORKERS) as executor:
         futures = {
-            executor.submit(_result_size, params): rid
+            executor.submit(_result_size, params, request_delay): rid
             for rid, params in region_params_map.items()
         }
         for future in as_completed(futures):
@@ -205,7 +246,7 @@ def collect_all_ids(
 
         with ThreadPoolExecutor(max_workers=ID_WORKERS) as executor:
             futures = {
-                executor.submit(_result_size, params): (rid, dc)
+                executor.submit(_result_size, params, request_delay): (rid, dc)
                 for rid, dc, params in disp_probe_args
             }
             for future in as_completed(futures):
@@ -229,7 +270,7 @@ def collect_all_ids(
     all_ids: set[int] = set()
     with ThreadPoolExecutor(max_workers=ID_WORKERS) as executor:
         futures = {
-            executor.submit(collect_estate_ids, params, None): params
+            executor.submit(collect_estate_ids, params, None, request_delay): params
             for params in collection_buckets
         }
         for future in as_completed(futures):
@@ -252,6 +293,8 @@ def run_scan(
     price_max: int = PRICE_MAX_DEFAULT,
     dry_run: bool = False,
     region_filter: Optional[int] = None,
+    request_delay: float = REQUEST_DELAY_DEFAULT,
+    max_retries: int = MAX_RETRIES_DEFAULT,
 ) -> dict:
     """
     Full pipeline:
@@ -260,11 +303,17 @@ def run_scan(
       3. Scrape + score each new estate in a thread pool.
       4. Write results to the DB on the main thread (thread-safe).
 
+    Args:
+        request_delay: minimum seconds between requests per worker.
+        max_retries:   retry attempts before skipping a failed estate.
+
     Returns a summary dict.
     """
     logger.info(
-        "=== Full market scan START  price_max=%d  dry_run=%s  region=%s  workers=%d ===",
+        "=== Full market scan START  price_max=%d  dry_run=%s  region=%s  "
+        "workers=%d  request_delay=%.2fs  max_retries=%d ===",
         price_max, dry_run, region_filter or "all", SCRAPE_WORKERS,
+        request_delay, max_retries,
     )
 
     db = SessionLocal()
@@ -272,7 +321,7 @@ def run_scan(
         known_ids = _known_estate_ids(db)
         logger.info("Already in DB: %d properties", len(known_ids))
 
-        all_ids = collect_all_ids(price_max, region_filter=region_filter)
+        all_ids = collect_all_ids(price_max, region_filter=region_filter, request_delay=request_delay)
         logger.info("Total unique IDs from Sreality: %d", len(all_ids))
 
         new_ids = [eid for eid in all_ids if eid not in known_ids]
@@ -296,7 +345,7 @@ def run_scan(
 
         with ThreadPoolExecutor(max_workers=SCRAPE_WORKERS) as executor:
             futures = {
-                executor.submit(_scrape_and_score, eid, price_max): eid
+                executor.submit(_scrape_and_score, eid, price_max, request_delay, max_retries): eid
                 for eid in new_ids
             }
 
@@ -311,7 +360,7 @@ def run_scan(
                     continue
 
                 if result is None:
-                    # Price over cap – already logged at DEBUG level
+                    # Price over cap or 403/404 – already logged
                     skipped += 1
                     continue
 
@@ -402,23 +451,39 @@ if __name__ == "__main__":
         metavar="1-14",
         help="Restrict scan to a single Sreality region ID (useful for testing)",
     )
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=REQUEST_DELAY_DEFAULT,
+        metavar="SECONDS",
+        help=f"Minimum seconds between requests per worker (default: {REQUEST_DELAY_DEFAULT})",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=MAX_RETRIES_DEFAULT,
+        metavar="N",
+        help=f"How many times to retry a failed request before skipping (default: {MAX_RETRIES_DEFAULT})",
+    )
     args = parser.parse_args()
 
     result = run_scan(
         price_max=args.price_max,
         dry_run=args.dry_run,
         region_filter=args.region,
+        request_delay=args.request_delay,
+        max_retries=args.max_retries,
     )
 
-    print("\n=== Summary ===")
-    print(f"  Total found on Sreality : {result['total_found']}")
-    print(f"  Already in DB (skipped)  : {result['skipped']}")
-    print(f"  New properties scraped   : {result['scraped']}")
-    print(f"  Successfully saved       : {result['saved']}")
-    print(f"  Errors                   : {len(result['errors'])}")
+    logger.info("=== Summary ===")
+    logger.info("  Total found on Sreality : %d", result["total_found"])
+    logger.info("  Already in DB (skipped)  : %d", result["skipped"])
+    logger.info("  New properties scraped   : %d", result["scraped"])
+    logger.info("  Successfully saved       : %d", result["saved"])
+    logger.info("  Errors                   : %d", len(result["errors"]))
     if result["errors"]:
-        print("\nFirst 10 errors:")
+        logger.warning("First 10 errors:")
         for err in result["errors"][:10]:
-            print(f"  {err}")
+            logger.warning("  %s", err)
 
     sys.exit(0 if not result["errors"] else 1)

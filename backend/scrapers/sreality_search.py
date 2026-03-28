@@ -52,40 +52,53 @@ TYPE_MAP = {"byty": 1, "domy": 2, "pozemky": 3, "komercni": 4, "ostatni": 5}
 #   6=Královéhradecký  7=Pardubický  8=Olomoucký  9=Zlínský  10=Praha
 #   11=Středočeský  12=Moravskoslezský  13=Kraj Vysočina  14=Jihomoravský
 LOCALITY_TO_REGION: dict[str, int] = {
-    # Praha
+    # Praha (10) – region slug + city
     "praha": 10,
-    # Jihočeský kraj (1)
+    # Jihočeský kraj (1) – region slug + cities
+    "jihoceskykraj": 1, "jihoceskykraj-kraj": 1, "jihocesky-kraj": 1,
     "ceske-budejovice": 1, "jindrichuv-hradec": 1, "pisek": 1,
     "prachatice": 1, "strakonice": 1, "tabor": 1, "cesky-krumlov": 1,
-    # Plzeňský kraj (2)
+    # Plzeňský kraj (2) – region slug + cities
+    "plzensky-kraj": 2, "plzensky": 2,
     "plzen": 2, "klatovy": 2, "domazlice": 2, "rokycany": 2, "tachov": 2,
-    # Karlovarský kraj (3)
+    # Karlovarský kraj (3) – region slug + cities
+    "karlovarsky-kraj": 3, "karlovarsky": 3,
     "karlovy-vary": 3, "cheb": 3, "sokolov": 3,
-    # Ústecký kraj (4)
+    # Ústecký kraj (4) – region slug + cities
+    "ustecky-kraj": 4, "ustecky": 4,
     "teplice": 4, "most": 4, "decin": 4, "chomutov": 4,
     "litomerice": 4, "louny": 4, "usti-nad-labem": 4,
-    # Liberecký kraj (5)
+    # Liberecký kraj (5) – region slug + cities
+    "liberecky-kraj": 5, "liberecky": 5,
     "liberec": 5, "jablonec-nad-nisou": 5, "ceska-lipa": 5, "semily": 5,
-    # Královéhradecký kraj (6)
+    # Královéhradecký kraj (6) – region slug + cities
+    "kralovehradecky-kraj": 6, "kralovehradecky": 6,
     "hradec-kralove": 6, "jicin": 6, "nachod": 6,
     "rychnov-nad-kneznou": 6, "trutnov": 6,
-    # Pardubický kraj (7)
+    # Pardubický kraj (7) – region slug + cities
+    "pardubicky-kraj": 7, "pardubicky": 7,
     "pardubice": 7, "chrudim": 7, "svitavy": 7, "usti-nad-orlici": 7,
-    # Olomoucký kraj (8)
+    # Olomoucký kraj (8) – region slug + cities
+    "olomoucky-kraj": 8, "olomoucky": 8,
     "olomouc": 8, "prerov": 8, "prostejov": 8, "sumperk": 8, "jesenik": 8,
-    # Zlínský kraj (9)
+    # Zlínský kraj (9) – region slug + cities
+    "zlinsky-kraj": 9, "zlinsky": 9,
     "zlin": 9, "vsetin": 9, "kromeriz": 9, "uherske-hradiste": 9,
-    # Středočeský kraj (11)
+    # Středočeský kraj (11) – region slug + cities
+    "stredocesky-kraj": 11, "stredocesky": 11,
     "melnik": 11, "beroun": 11, "kladno": 11, "kolin": 11,
     "kutna-hora": 11, "mlada-boleslav": 11, "nymburk": 11,
     "pribram": 11, "rakovnik": 11, "benesov": 11,
-    # Moravskoslezský kraj (12)
+    # Moravskoslezský kraj (12) – region slug + cities
+    "moravskoslezsky-kraj": 12, "moravskoslezsky": 12,
     "ostrava": 12, "frydek-mistek": 12, "karvina": 12,
     "novy-jicin": 12, "opava": 12, "bruntal": 12,
-    # Kraj Vysočina (13)
+    # Kraj Vysočina (13) – region slug + cities
+    "kraj-vysocina": 13, "vysocina": 13,
     "jihlava": 13, "havlickuv-brod": 13, "pelhrimov": 13,
     "trebic": 13, "zdar-nad-sazavou": 13,
-    # Jihomoravský kraj (14)
+    # Jihomoravský kraj (14) – region slug + cities
+    "jihomoravsky-kraj": 14, "jihomoravsky": 14,
     "brno": 14, "blansko": 14, "breclav": 14, "hodonin": 14,
     "vyskov": 14, "znojmo": 14,
 }
@@ -150,6 +163,13 @@ def parse_search_url(url: str) -> tuple[dict, dict | None]:
     if "plocha-do" in qs:
         params["usable_area_to"] = qs["plocha-do"][0]
 
+    # Ownership type (vlastnictvi=osobni → 1, druzstevni → 2)
+    OWNERSHIP_MAP = {"osobni": 1, "druzstevni": 2}
+    vlastnictvi_raw = qs.get("vlastnictvi", [""])[0].lower()
+    if vlastnictvi_raw in OWNERSHIP_MAP:
+        params["ownership_type_cb"] = OWNERSHIP_MAP[vlastnictvi_raw]
+        logger.info("Ownership filter: %s → %d", vlastnictvi_raw, OWNERSHIP_MAP[vlastnictvi_raw])
+
     # Bounding box – the Sreality API ignores lat/lon query params, so we
     # store them separately for GPS post-filtering in collect_estate_ids.
     try:
@@ -175,12 +195,16 @@ def parse_search_url(url: str) -> tuple[dict, dict | None]:
 def collect_estate_ids(
     api_params: dict,
     bbox: dict | None = None,
+    request_delay: float = 0.0,
 ) -> tuple[list[int], int]:
     """
     Paginate through ALL Sreality search results and return estate IDs.
 
     If bbox is provided, only returns estates whose GPS coordinates fall
     within {"lat_min", "lat_max", "lon_min", "lon_max"}.
+
+    Args:
+        request_delay: seconds to sleep after each page request (rate limiting).
 
     Returns:
         (list_of_estate_ids, total_found_count)
@@ -193,6 +217,8 @@ def collect_estate_ids(
         while True:
             params = {**api_params, "per_page": PER_PAGE, "page": page}
             resp = client.get("https://www.sreality.cz/api/cs/v2/estates", params=params)
+            if request_delay:
+                time.sleep(request_delay)
 
             if resp.status_code != 200:
                 logger.warning("Search page %d returned %s", page, resp.status_code)

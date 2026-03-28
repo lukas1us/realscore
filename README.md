@@ -302,16 +302,23 @@ python -m backend.jobs.full_market_scan --dry-run
 
 # Ladicí režim — jen jeden kraj (region ID 1–14)
 python -m backend.jobs.full_market_scan --region 14
+
+# Agresivnější rate limiting (1 s mezi požadavky, 5 pokusů)
+python -m backend.jobs.full_market_scan --request-delay 1.0 --max-retries 5
 ```
 
 Výchozí nastavení:
 
-| Parametr | Hodnota | Popis |
-|----------|---------|-------|
+| Parametr | Výchozí hodnota | Popis |
+|----------|-----------------|-------|
 | `--price-max` | 5 000 000 | Maximální cena v Kč |
+| `--request-delay` | 0.5 | Minimální prodleva mezi požadavky na vlákno (sekundy) |
+| `--max-retries` | 3 | Počet pokusů o opakování při chybě před přeskočením záznamu |
 | `ID_WORKERS` | 8 | Vlákna pro sběr ID z API |
 | `SCRAPE_WORKERS` | 5 | Vlákna pro detail scraping + scoring |
 | `COMMIT_BATCH` | 50 | Počet záznamů mezi DB commity |
+
+**Retry logika:** při HTTP 429 nebo chybě připojení se čeká `2^pokus` sekund (exponenciální backoff) a požadavek se opakuje. Při HTTP 403 nebo 404 se záznam okamžitě přeskočí. Po vyčerpání `--max-retries` pokusů se záznam přeskočí a chyba se zapíše do logu.
 
 Záznamy, které již v DB existují (detekce dle URL/estate ID), jsou přeskočeny — job je bezpečné spouštět opakovaně.
 
