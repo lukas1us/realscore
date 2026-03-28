@@ -145,7 +145,10 @@ def _scrape_and_score(
             # Sreality API price filter is not strict – detail price can exceed
             # the search cap. Drop listings whose scraped price is over the limit.
             detail_price = prop_data.get("price")
-            if detail_price and detail_price > price_max:
+            if not detail_price:
+                logger.info("Estate %d skipped: no price (Cena na vyžádání or unparseable)", estate_id)
+                return estate_id, None, None
+            if detail_price > price_max:
                 logger.info(
                     "Estate %d skipped: scraped price %.0f > price_max %d",
                     estate_id, detail_price, price_max,
