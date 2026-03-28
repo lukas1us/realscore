@@ -6,6 +6,9 @@ Czech real estate investment scoring tool. Paste a Sreality or Bezrealitky listi
 
 ```
 realscoreCZ/
+├── .github/
+│   └── workflows/
+│       └── ci.yml             # Unit test CI (no DB required)
 ├── backend/
 │   ├── main.py            # FastAPI app entry point
 │   ├── config.py          # Settings (loaded from .env)
