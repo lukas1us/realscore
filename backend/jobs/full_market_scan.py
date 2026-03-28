@@ -380,6 +380,7 @@ def run_scan(
                     year_built=prop_data.get("year_built"),
                     floor=prop_data.get("floor"),
                     has_elevator=prop_data.get("has_elevator"),
+                    ownership=prop_data.get("ownership"),
                     score_total=scores.get("score_total"),
                     score_yield=scores.get("score_yield"),
                     score_demographic=scores.get("score_demographic"),
