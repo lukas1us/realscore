@@ -26,7 +26,7 @@ jobs:
       - name: Run unit tests
         run: pytest tests/test_scoring.py tests/test_regions.py tests/test_benchmarks.py tests/test_rent_market_scan.py -v
 
-dependency-check:
+  dependency-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
