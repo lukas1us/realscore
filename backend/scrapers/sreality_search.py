@@ -123,11 +123,13 @@ def parse_search_url(url: str) -> tuple[dict, dict | None]:
     params: dict = {}
     bbox: dict | None = None
 
+    # API: category_main_cb = typ nemovitosti (byty/domy/…),
+    #      category_type_cb = typ nabídky (prodej/pronájem/…).
     if len(path_parts) >= 2:
-        params["category_main_cb"] = TRANSACTION_MAP.get(path_parts[1], 1)
+        params["category_type_cb"] = TRANSACTION_MAP.get(path_parts[1], 1)
 
     if len(path_parts) >= 3:
-        params["category_type_cb"] = TYPE_MAP.get(path_parts[2], 1)
+        params["category_main_cb"] = TYPE_MAP.get(path_parts[2], 1)
 
     # Map locality slug → locality_region_id for API pre-filtering
     if len(path_parts) >= 4:

@@ -327,11 +327,10 @@ def scrape_rental_estimates(city: str, disposition: str, count: int = 20) -> lis
     sub_cb = DISP_TO_CODE.get(disposition.lower())
 
     params: dict = {
-        "category_main_cb": 2,   # pronájem
-        "category_type_cb": 1,   # byt
+        "category_main_cb": 1,   # byty
+        "category_type_cb": 2,   # pronájem
         "per_page": count,
         "page": 1,
-        "locality_region_id": 0,
     }
     if sub_cb:
         params["category_sub_cb"] = sub_cb
@@ -347,9 +346,15 @@ def scrape_rental_estimates(city: str, disposition: str, count: int = 20) -> lis
         results = resp.json().get("_embedded", {}).get("estates", [])
         rents = []
         for estate in results:
-            p = estate.get("price")
-            if p and isinstance(p, (int, float)) and p > 1000:
-                rents.append(float(p))
+            p = estate.get("price_czk")
+            if isinstance(p, dict):
+                raw = p.get("value_raw")
+                if raw is not None and isinstance(raw, (int, float)) and raw > 1000:
+                    rents.append(float(raw))
+            else:
+                p = estate.get("price")
+                if p and isinstance(p, (int, float)) and p > 1000:
+                    rents.append(float(p))
         return rents
     except Exception as exc:
         logger.warning("Rental scrape failed: %s", exc)

@@ -2,8 +2,9 @@
 rent_market_scan.py — Populate rent_benchmarks from live Sreality rental listings.
 
 For each distinct (city, disposition) pair in the properties table the job:
-  1. Queries the Sreality rental search API (category_main_cb=2) filtered by
-     disposition.  City is mapped to a Sreality region ID when possible
+  1. Queries the Sreality rental search API (byty: category_main_cb=1,
+     pronájem: category_type_cb=2) filtered by disposition.  City is mapped
+     to a Sreality region ID when possible
      (via LOCALITY_TO_REGION) so results are geographically relevant; if no
      region mapping is found the search covers all of Czech Republic.
   2. Collects asking rents from search results.
@@ -93,8 +94,8 @@ def _fetch_rents(
     region_id = _city_to_region_id(city)
 
     params: dict = {
-        "category_main_cb": 2,  # pronájem
-        "category_type_cb": 1,  # byt
+        "category_main_cb": 1,  # byty (flats)
+        "category_type_cb": 2,  # pronájem (rent)
         "per_page": PER_PAGE,
         "page": 1,
         "category_sub_cb": sub_cb,
@@ -129,7 +130,11 @@ def _fetch_rents(
             rents: list[float] = []
             for estate in estates:
                 price = estate.get("price_czk")
-                if price and isinstance(price, (int, float)) and price > 0:
+                if isinstance(price, dict):
+                    raw = price.get("value_raw")
+                    if raw is not None and isinstance(raw, (int, float)) and raw > 0:
+                        rents.append(float(raw))
+                elif price and isinstance(price, (int, float)) and price > 0:
                     rents.append(float(price))
 
             logger.debug(
