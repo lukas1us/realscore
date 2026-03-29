@@ -220,25 +220,44 @@ curl -X POST http://localhost:8000/api/analyze \
 ```
 
 
-## Rent Benchmarks
+## Rent Market Scan
 
-Rental market data is stored in the `rent_benchmarks` table (`city`, `disposition`, `median_rent`, `listing_count`). It is populated by the `rent_market_scan.py` job, which queries Sreality's rental search API for every distinct (city, disposition) pair found in the `properties` table.
-
-`listing_count` is the Sreality API total **when the city maps to a `locality_region_id`** (Praha, kraj, or known city slug — still broader than a single municipality). If the city string does not map to a region, the job stores the **first-page sample size** (at most 20) instead of the national total, so liquidity scoring is not inflated by country-wide inventory.
+`backend/jobs/rent_market_scan.py` populates the `rent_benchmarks` table by scraping Sreality's rental search API. For every distinct `(city, disposition)` pair present in the `properties` table it queries the rental listings, computes the median asking rent and records the listing count. The job is safe to re-run — it upserts (insert or update) each benchmark row.
 
 ```bash
-# Apply migration (existing installations)
-psql $DATABASE_URL -f backend/database/004_rent_benchmarks.sql
-
-# Populate / refresh benchmarks
+# Basic run
 python -m backend.jobs.rent_market_scan
+
+# Dry-run — prints what would be upserted, writes nothing to DB
+python -m backend.jobs.rent_market_scan --dry-run
+
+# Custom rate limiting (1 s between requests, 5 retries)
 python -m backend.jobs.rent_market_scan --request-delay 1.0 --max-retries 5
 
 # Via API (runs synchronously)
 curl -X POST http://localhost:8000/api/benchmarks/rent-refresh
 ```
 
+Default settings:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | off | Preview mode — queries the API but does not write to the database |
+| `--request-delay SECONDS` | `0.5` | Minimum seconds between API requests |
+| `--max-retries N` | `3` | Retries per (city, disposition) pair on HTTP 429 or connection error (exponential backoff: `2^attempt` s). HTTP 403/404 skips immediately. |
+
+**listing_count note:** when the city maps to a known `locality_region_id` the job uses the Sreality API total (can be > 20). When the city is not in the mapping, it falls back to the first-page sample size (at most 20) to avoid inflating liquidity scores with country-wide inventory.
+
 The `listing_count` value feeds into `score_liquidity`: a thin rental market (< 5 active listings) penalises the score by −10 points; a liquid market (> 20 listings) adds +5 points.
+
+## Rent Benchmarks
+
+Rental market data is stored in the `rent_benchmarks` table (`city`, `disposition`, `median_rent`, `listing_count`). It is populated by the `rent_market_scan.py` job (see above).
+
+```bash
+# Apply migration (existing installations)
+psql $DATABASE_URL -f backend/database/004_rent_benchmarks.sql
+```
 
 ## Price Benchmarks
 
