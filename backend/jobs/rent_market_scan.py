@@ -9,6 +9,9 @@ For each distinct (city, disposition) pair in the properties table the job:
      region mapping is found the search covers all of Czech Republic.
   2. Collects asking rents from search results.
   3. Computes median_rent and listing_count.
+     ``listing_count`` is the API total only when ``locality_region_id`` is set
+     (kraj / Praha scope).  Without a region filter, ``listing_count`` is the
+     sample size on page 1 (≤ per_page), not the national total.
   4. Upserts the result into rent_benchmarks.
 
 Duplicates are avoided at the query level — each (city, disposition) pair is
@@ -55,11 +58,25 @@ PER_PAGE = 20  # one page is enough for a median estimate
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _normalize_city_for_region(city: str) -> str:
+    """Match main city name to LOCALITY_TO_REGION keys (same idea as benchmark city keys)."""
+    if not city:
+        return ""
+    base = city.split(" - ")[0].strip()
+    if not base:
+        return ""
+    lower = base.lower()
+    if lower.startswith("praha"):
+        return "praha"
+    return base
+
+
 def _city_to_region_id(city: str) -> Optional[int]:
     """Try to map a city name to a Sreality locality_region_id."""
-    if not city:
+    base = _normalize_city_for_region(city)
+    if not base:
         return None
-    slug = city.lower().strip()
+    slug = base.lower().strip()
     # Direct match (e.g. "teplice" → 4)
     if slug in LOCALITY_TO_REGION:
         return LOCALITY_TO_REGION[slug]
@@ -83,8 +100,9 @@ def _fetch_rents(
     """
     Hit Sreality search API for rentals matching city + disposition.
 
-    Returns (list_of_rents, result_size).
-    result_size is the total count reported by the API (may exceed len(rents)).
+    Returns (list_of_rents, listing_count).
+    When locality_region_id is applied, listing_count is the API result_size.
+    Otherwise it is len(rents) (sample only — national result_size would be misleading).
     """
     sub_cb = DISP_TO_CODE.get(disposition.lower())
     if sub_cb is None:
@@ -92,6 +110,7 @@ def _fetch_rents(
         return [], 0
 
     region_id = _city_to_region_id(city)
+    region_scoped = region_id is not None
 
     params: dict = {
         "category_main_cb": 1,  # byty (flats)
@@ -137,11 +156,20 @@ def _fetch_rents(
                 elif price and isinstance(price, (int, float)) and price > 0:
                     rents.append(float(price))
 
+            if region_scoped:
+                listing_count = result_size
+            else:
+                listing_count = len(rents)
+                logger.debug(
+                    "%s / %s: no locality_region_id — listing_count=%d (sample), not national total %d",
+                    city, disposition, listing_count, result_size,
+                )
+
             logger.debug(
-                "%s / %s: result_size=%d collected=%d rents",
-                city, disposition, result_size, len(rents),
+                "%s / %s: result_size=%d collected=%d rents listing_count=%d region_scoped=%s",
+                city, disposition, result_size, len(rents), listing_count, region_scoped,
             )
-            return rents, result_size
+            return rents, listing_count
 
         except Exception as exc:
             last_exc = exc
@@ -194,15 +222,14 @@ def run_rent_scan(
         errors = 0
 
         for city, disposition in pairs:
-            rents, result_size = _fetch_rents(city, disposition, request_delay, max_retries)
+            rents, listing_count = _fetch_rents(city, disposition, request_delay, max_retries)
 
             if not rents:
-                logger.info("No rents found for %s / %s (result_size=%d)", city, disposition, result_size)
+                logger.info("No rents found for %s / %s (listing_count=%d)", city, disposition, listing_count)
                 skipped += 1
                 continue
 
             median_rent = int(statistics.median(rents))
-            listing_count = result_size  # API-reported total, not just page count
 
             logger.info(
                 "%s / %s → median_rent=%d  listing_count=%d  (sample=%d)",

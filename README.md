@@ -48,8 +48,9 @@ realscoreCZ/
 │   ├── conftest.py        # pytest fixtures (test DB setup + teardown)
 │   ├── test_scoring.py    # Unit tests — scoring engine pure functions
 │   ├── test_regions.py    # Unit tests — extract_kraj() fallback chain
-│   ├── test_benchmarks.py # Unit tests — _normalize_city()
-│   └── test_db.py         # SQL smoke tests — ORM, filters, benchmarks
+│   ├── test_benchmarks.py      # Unit tests — _normalize_city()
+│   ├── test_rent_market_scan.py # Unit tests — rent scan city → region helpers
+│   └── test_db.py              # SQL smoke tests — ORM, filters, benchmarks
 ├── requirements.txt
 ├── .env.example
 ├── docker-compose.yml     # PostgreSQL in Docker
@@ -222,6 +223,8 @@ curl -X POST http://localhost:8000/api/analyze \
 ## Rent Benchmarks
 
 Rental market data is stored in the `rent_benchmarks` table (`city`, `disposition`, `median_rent`, `listing_count`). It is populated by the `rent_market_scan.py` job, which queries Sreality's rental search API for every distinct (city, disposition) pair found in the `properties` table.
+
+`listing_count` is the Sreality API total **when the city maps to a `locality_region_id`** (Praha, kraj, or known city slug — still broader than a single municipality). If the city string does not map to a region, the job stores the **first-page sample size** (at most 20) instead of the national total, so liquidity scoring is not inflated by country-wide inventory.
 
 ```bash
 # Apply migration (existing installations)

@@ -15,7 +15,7 @@ in `README.md` with the current directory tree.
 
 After **every** code change, run the test suite and act on the results:
 ```bash
-pytest tests/test_scoring.py tests/test_regions.py tests/test_benchmarks.py -v
+pytest tests/test_scoring.py tests/test_regions.py tests/test_benchmarks.py tests/test_rent_market_scan.py -v
 ```
 
 ### Rules
@@ -79,21 +79,6 @@ docs: update README with ECB API setup
 Example:
 ```bash
 python -m backend.jobs.full_market_scan --request-delay 1.0 --max-retries 5
-```
-
-## Rent Market Scan — CLI flags
-
-`backend/jobs/rent_market_scan.py` accepts the same rate-limiting flags:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dry-run` | off | List (city, disposition) pairs without making API calls or DB writes. |
-| `--request-delay SECONDS` | `0.5` | Seconds to sleep after each Sreality rental API request. |
-| `--max-retries N` | `3` | Retry attempts on rate-limit/connection errors before skipping a pair. |
-
-Example:
-```bash
-python -m backend.jobs.rent_market_scan --request-delay 1.0 --max-retries 5
 ```
 
 ---
