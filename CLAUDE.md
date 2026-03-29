@@ -81,4 +81,19 @@ Example:
 python -m backend.jobs.full_market_scan --request-delay 1.0 --max-retries 5
 ```
 
+## Rent Market Scan — CLI flags
+
+`backend/jobs/rent_market_scan.py` accepts the same rate-limiting flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | off | List (city, disposition) pairs without making API calls or DB writes. |
+| `--request-delay SECONDS` | `0.5` | Seconds to sleep after each Sreality rental API request. |
+| `--max-retries N` | `3` | Retry attempts on rate-limit/connection errors before skipping a pair. |
+
+Example:
+```bash
+python -m backend.jobs.rent_market_scan --request-delay 1.0 --max-retries 5
+```
+
 ---

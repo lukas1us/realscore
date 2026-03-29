@@ -13,15 +13,16 @@ realscoreCZ/
 │   ├── main.py            # FastAPI app entry point
 │   ├── config.py          # Settings (loaded from .env)
 │   ├── database.py        # SQLAlchemy engine + session
-│   ├── models.py          # ORM models (Property, PriceBenchmark)
+│   ├── models.py          # ORM models (Property, PriceBenchmark, RentBenchmark)
 │   ├── schemas.py         # Pydantic request/response schemas
 │   ├── database/
 │   │   ├── 000_initialization.sql      # Complete schema for fresh installations
 │   │   ├── 002_add_kraj.sql            # ADD COLUMN kraj + backfill (existing DB)
-│   │   └── 003_price_benchmarks.sql    # CREATE TABLE price_benchmarks + bootstrap (existing DB)
+│   │   ├── 003_price_benchmarks.sql    # CREATE TABLE price_benchmarks + bootstrap (existing DB)
+│   │   └── 004_rent_benchmarks.sql     # CREATE TABLE rent_benchmarks (existing DB)
 │   ├── routers/
 │   │   ├── analysis.py    # POST /api/analyze
-│   │   ├── benchmarks.py  # POST /api/benchmarks/refresh
+│   │   ├── benchmarks.py  # POST /api/benchmarks/refresh, /api/benchmarks/rent-refresh
 │   │   └── properties.py  # GET/DELETE /api/properties
 │   ├── scrapers/
 │   │   ├── sreality.py         # Sreality detail JSON API scraper
@@ -30,12 +31,13 @@ realscoreCZ/
 │   │   ├── idnes.py            # reality.idnes.cz HTML scraper
 │   │   └── market.py           # Active listing counter (liquidity)
 │   ├── jobs/
-│   │   └── full_market_scan.py    # Bulk scrape all Sreality listings (threaded)
+│   │   ├── full_market_scan.py    # Bulk scrape all Sreality listings (threaded)
+│   │   └── rent_market_scan.py    # Scrape rental listings → populate rent_benchmarks
 │   ├── scripts/
 │   │   ├── backfill_ownership.py  # Backfill ownership + score_liquidity from raw_data
 │   │   └── backfill_city.py       # Backfill city municipality from raw_data["locality"]
 │   ├── services/
-│   │   ├── benchmarks.py  # Price benchmark lookup + refresh
+│   │   ├── benchmarks.py  # Price + rent benchmark lookup + refresh
 │   │   ├── czso.py        # ČSÚ population + economic data
 │   │   └── scoring.py     # Scoring engine (all 5 dimensions)
 │   └── utils/
@@ -172,7 +174,7 @@ Switch to **Historie analýz** to see all previously scored properties, sortable
 | Demographic / Locality (`score_demographic`) | 40 % | SVL risk, locality tier, city stigma, ČSÚ population data |
 | Economic / Energy (`score_economic`) | 20 % | PENB energy class |
 | Property Quality (`score_quality`) | 15 % | Construction type, floor, building age, revitalization |
-| Liquidity / Ownership (`score_liquidity`) | 15 % | OV vs. DV ownership, active listings |
+| Liquidity / Ownership (`score_liquidity`) | 15 % | OV vs. DV ownership + rental market depth signal (listing_count from rent_benchmarks: < 5 → −10, > 20 → +5) |
 
 ### Score interpretation
 
@@ -203,6 +205,7 @@ Any dimension below 40 generates a **red flag** in the output.
 | `DELETE` | `/api/properties/{id}` | Delete a property record |
 | `DELETE` | `/api/properties` | Delete all property records |
 | `POST` | `/api/benchmarks/refresh` | Recompute price benchmarks from current DB data |
+| `POST` | `/api/benchmarks/rent-refresh` | Scrape Sreality rentals and refresh rent_benchmarks |
 | `GET` | `/health` | Health check |
 
 ### Example request
@@ -215,6 +218,24 @@ curl -X POST http://localhost:8000/api/analyze \
   }'
 ```
 
+
+## Rent Benchmarks
+
+Rental market data is stored in the `rent_benchmarks` table (`city`, `disposition`, `median_rent`, `listing_count`). It is populated by the `rent_market_scan.py` job, which queries Sreality's rental search API for every distinct (city, disposition) pair found in the `properties` table.
+
+```bash
+# Apply migration (existing installations)
+psql $DATABASE_URL -f backend/database/004_rent_benchmarks.sql
+
+# Populate / refresh benchmarks
+python -m backend.jobs.rent_market_scan
+python -m backend.jobs.rent_market_scan --request-delay 1.0 --max-retries 5
+
+# Via API (runs synchronously)
+curl -X POST http://localhost:8000/api/benchmarks/rent-refresh
+```
+
+The `listing_count` value feeds into `score_liquidity`: a thin rental market (< 5 active listings) penalises the score by −10 points; a liquid market (> 20 listings) adds +5 points.
 
 ## Price Benchmarks
 

@@ -85,3 +85,18 @@ CREATE TABLE IF NOT EXISTS price_benchmarks (
 );
 
 CREATE INDEX IF NOT EXISTS ix_price_benchmarks_id ON price_benchmarks (id);
+
+-- ---------------------------------------------------------------------------
+-- Table: rent_benchmarks
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rent_benchmarks (
+    id               SERIAL PRIMARY KEY,
+    city             VARCHAR NOT NULL,
+    disposition      VARCHAR NOT NULL,
+    median_rent      INTEGER,
+    listing_count    INTEGER,
+    updated_at       TIMESTAMP DEFAULT NOW(),
+    UNIQUE (city, disposition)
+);
+
+CREATE INDEX IF NOT EXISTS ix_rent_benchmarks_id ON rent_benchmarks (id);

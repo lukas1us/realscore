@@ -20,7 +20,12 @@ import statistics
 from datetime import datetime
 from typing import Optional
 
+from typing import TYPE_CHECKING
+
 from backend.scrapers.sreality import scrape_rental_estimates
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +128,13 @@ def score_penb(energy_class: Optional[str]) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Dimenze 3: Vlastnictví OV/DV (→ score_liquidity v DB)
+# Dimenze 3: Vlastnictví OV/DV + tržní likvidita (→ score_liquidity v DB)
 # ---------------------------------------------------------------------------
+
+# Thresholds for market-liquidity adjustment from rental listing count
+LISTING_COUNT_LOW = 5    # below this → penalize (thin market)
+LISTING_COUNT_HIGH = 20  # above this → small boost (liquid market)
+
 
 def score_ownership(ownership: Optional[str]) -> float:
     """
@@ -142,6 +152,25 @@ def score_ownership(ownership: Optional[str]) -> float:
     if ownership == "DV_no_transfer":
         return 10.0
     return 60.0  # neznámé → mírně podprůměrné
+
+
+def score_market_liquidity(listing_count: Optional[int]) -> float:
+    """
+    Adjustment component based on number of active rental listings.
+
+    Thin rental market (< LISTING_COUNT_LOW)  → −10 (hard to find tenants)
+    Liquid market     (> LISTING_COUNT_HIGH)  → +5  (plenty of comparable rents)
+    Middle range                              →  0  (neutral)
+
+    Returns an additive delta applied to the ownership base score.
+    """
+    if listing_count is None:
+        return 0.0
+    if listing_count < LISTING_COUNT_LOW:
+        return -10.0
+    if listing_count > LISTING_COUNT_HIGH:
+        return 5.0
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +251,15 @@ def score_rental_yield(
     city: Optional[str],
     disposition: Optional[str],
     size_m2: Optional[float],
+    db: "Optional[Session]" = None,
 ) -> tuple[float, Optional[float], Optional[float]]:
     """
     Returns (score 0–100, estimated_monthly_rent, gross_yield_pct).
+
+    Rent estimation priority:
+      1. DB rent_benchmarks lookup (if db session provided).
+      2. Live scrape from Sreality (fallback when no benchmark in DB).
+      3. Static m²-based estimate (last resort).
 
     Gross yield = (roční nájem / kupní cena) × 100.
     Stupnice skóre:
@@ -239,23 +274,32 @@ def score_rental_yield(
     if not price or price <= 0:
         return 0.0, None, None
 
-    # Pokus o načtení srovnatelných nájmů ze Sreality
-    rents: list[float] = []
-    if city and disposition:
+    # 1. DB benchmark lookup
+    if db is not None and city and disposition:
+        try:
+            from backend.services.benchmarks import get_rent_benchmark
+            benchmark = get_rent_benchmark(db, city, disposition)
+            if benchmark and benchmark.get("median_rent"):
+                estimated_rent = float(benchmark["median_rent"])
+        except Exception as exc:
+            logger.warning("Rent benchmark lookup failed: %s", exc)
+
+    # 2. Live scrape fallback
+    if estimated_rent is None and city and disposition:
         try:
             rents = scrape_rental_estimates(city, disposition)
+            if rents:
+                estimated_rent = statistics.median(rents)
         except Exception as exc:
             logger.warning("Rental scrape failed: %s", exc)
 
-    if rents:
-        estimated_rent = statistics.median(rents)
-    elif size_m2 and size_m2 > 0:
-        # Záložní odhad: průměr dle m² (CZK/měsíc)
-        # Praha ~350 Kč/m², Brno ~300, regionální města ~200
-        RENT_PER_M2_DEFAULT = 250.0
-        estimated_rent = size_m2 * RENT_PER_M2_DEFAULT
-    else:
-        return 20.0, None, None
+    # 3. Static m²-based fallback
+    if estimated_rent is None:
+        if size_m2 and size_m2 > 0:
+            RENT_PER_M2_DEFAULT = 250.0
+            estimated_rent = size_m2 * RENT_PER_M2_DEFAULT
+        else:
+            return 20.0, None, None
 
     gross_yield_pct = (estimated_rent * 12 / price) * 100
     score = _yield_to_score(gross_yield_pct)
@@ -373,15 +417,17 @@ def compute_financial(
 # Hlavní compose funkce
 # ---------------------------------------------------------------------------
 
-def compute_scores(prop: dict) -> dict:
+def compute_scores(prop: dict, db: "Optional[Session]" = None) -> dict:
     """
     Vypočítá všechny dílčí skóre a celkové kompozitní skóre.
 
     `prop` je dict s klíči odpovídajícími polím PropertyInput.
+    `db`   je volitelná SQLAlchemy session — pokud je předána, použije se
+           pro lookup rent_benchmarks (jinak se skrapuje živě nebo odhaduje).
 
     Vrací dict:
         score_yield, score_demographic (=lokalita), score_economic (=PENB),
-        score_quality (=fyzické), score_liquidity (=vlastnictví),
+        score_quality (=fyzické), score_liquidity (=vlastnictví + tržní likvidita),
         score_total, estimated_rent, gross_yield_pct, summary, red_flags
     """
     price = prop.get("price")
@@ -401,18 +447,33 @@ def compute_scores(prop: dict) -> dict:
     if city_stigma is None and city:
         city_stigma = city.strip() in STIGMATIZED_CITIES
 
+    # --- Rent benchmark lookup for listing_count ---
+    listing_count: Optional[int] = None
+    if db is not None and city and disposition:
+        try:
+            from backend.services.benchmarks import get_rent_benchmark
+            bm = get_rent_benchmark(db, city, disposition)
+            if bm:
+                listing_count = bm.get("listing_count")
+        except Exception as exc:
+            logger.warning("listing_count lookup failed: %s", exc)
+
     # --- Výpočet dimenzí ---
     s_locality = score_locality_svl(svl_risk, locality_tier, city_stigma)
     s_penb = score_penb(energy_class)
     s_ownership = score_ownership(ownership)
+    # Blend ownership score with market-liquidity signal from rental listing count
+    s_liquidity = max(0.0, min(100.0, s_ownership + score_market_liquidity(listing_count)))
     s_physical = score_physical(construction_type, floor, has_elevator, building_revitalized)
-    s_yield, estimated_rent, gross_yield_pct = score_rental_yield(price, city, disposition, size_m2)
+    s_yield, estimated_rent, gross_yield_pct = score_rental_yield(
+        price, city, disposition, size_m2, db=db
+    )
 
     # --- Celkové skóre ---
     score_total = (
         WEIGHTS["locality"] * s_locality
         + WEIGHTS["penb"] * s_penb
-        + WEIGHTS["ownership"] * s_ownership
+        + WEIGHTS["ownership"] * s_liquidity
         + WEIGHTS["physical"] * s_physical
         + WEIGHTS["yield"] * s_yield
     )
@@ -423,7 +484,7 @@ def compute_scores(prop: dict) -> dict:
         "score_demographic": round(s_locality, 1),   # ← lokalita / SVL
         "score_economic": round(s_penb, 1),           # ← PENB
         "score_quality": round(s_physical, 1),        # ← fyzické parametry
-        "score_liquidity": round(s_ownership, 1),     # ← vlastnictví OV/DV
+        "score_liquidity": round(s_liquidity, 1),     # ← vlastnictví OV/DV + tržní likvidita
         "score_total": round(score_total, 1),
         "estimated_rent": round(estimated_rent) if estimated_rent else None,
         "gross_yield_pct": round(gross_yield_pct, 2) if gross_yield_pct else None,

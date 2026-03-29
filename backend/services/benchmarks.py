@@ -14,7 +14,9 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.models import PriceBenchmark
+from datetime import datetime, timedelta
+
+from backend.models import PriceBenchmark, RentBenchmark
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,63 @@ def get_benchmark(db: Session, district: str | None, disposition: str | None) ->
             "median_price_m2": row.median_price_m2,
             "sample_size": row.sample_size,
         }
+
+    return None
+
+
+_BENCHMARK_STALE_DAYS = 30
+
+
+def get_rent_benchmark(
+    db: Session,
+    city: str | None,
+    disposition: str | None,
+) -> dict | None:
+    """Return rent benchmark for the given city and disposition.
+
+    Lookup order:
+      1. Exact (city, disposition) match.
+      2. Any disposition for the city (city-wide fallback).
+
+    Logs a warning when the benchmark is older than 30 days but still returns it.
+    Returns None when no benchmark exists at all.
+    """
+    if not city:
+        return None
+
+    def _to_dict(row: RentBenchmark) -> dict:
+        if row.updated_at and datetime.utcnow() - row.updated_at > timedelta(days=_BENCHMARK_STALE_DAYS):
+            logger.warning(
+                "Rent benchmark for %s/%s is stale (updated %s)",
+                row.city, row.disposition, row.updated_at.date(),
+            )
+        return {
+            "city": row.city,
+            "disposition": row.disposition,
+            "median_rent": row.median_rent,
+            "listing_count": row.listing_count,
+            "updated_at": row.updated_at,
+        }
+
+    # 1. Exact match
+    if disposition:
+        row = (
+            db.query(RentBenchmark)
+            .filter(RentBenchmark.city == city, RentBenchmark.disposition == disposition)
+            .first()
+        )
+        if row:
+            return _to_dict(row)
+
+    # 2. City-wide fallback: pick any row for the city (prefer the one with most listings)
+    row = (
+        db.query(RentBenchmark)
+        .filter(RentBenchmark.city == city)
+        .order_by(RentBenchmark.listing_count.desc().nullslast())
+        .first()
+    )
+    if row:
+        return _to_dict(row)
 
     return None
 

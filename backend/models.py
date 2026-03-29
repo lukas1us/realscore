@@ -53,6 +53,18 @@ class Property(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
+class RentBenchmark(Base):
+    __tablename__ = "rent_benchmarks"
+    __table_args__ = (UniqueConstraint("city", "disposition", name="uq_rent_benchmarks_city_disposition"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    city = Column(String, nullable=False)
+    disposition = Column(String, nullable=False)
+    median_rent = Column(Integer, nullable=True)    # CZK/month
+    listing_count = Column(Integer, nullable=True)  # number of active rental listings
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PriceBenchmark(Base):
     __tablename__ = "price_benchmarks"
     __table_args__ = (UniqueConstraint("city", "disposition", name="uq_price_benchmarks_city_disposition"),)
